@@ -1,0 +1,26 @@
+// Constructed QA only. No laboratory group is seeded into the public application.
+import assert from 'node:assert/strict';
+import {newSession} from '../dist/src/data-model/session.mjs';
+import {importFiles} from '../dist/src/importers/batch.mjs';
+import {cond} from '../dist/src/data-model/conditions.mjs';
+import {courseEvaluation} from '../dist/src/decision/course-fc1.mjs';
+import {FC1_HANDOFF_NOTE} from '../dist/src/decision/workflow.mjs';
+const s=newSession();s.settings.course={assessmentScope:'fc1'};
+importFiles(s,[{name:'SYNTHETIC-handoff.csv',text:'run_key,peak_no,rt_min,width_half_min,organic_solvent,percent_b,pressure_max_psi\n'+Array.from({length:7},(_,i)=>`QA,${i+1},${i+1},0.9,ACN,70,2000`).join('\n')}]);
+const r=s.runs[0];for(const [k,v] of Object.entries({flow:1.5,mode:'ISO',ovenSetpoint:30}))r.conditions[k]=cond(v,'user');
+let count=0;const check=(name,fn)=>{fn();count++;console.log('PASS '+name);};
+let e=courseEvaluation(s);const before=JSON.stringify(s.runs);
+check('unmet separation starts in Selectivity without an Efficiency model',()=>{assert.equal(e.current.stage,'selectivity');assert.equal(e.current.efficiency,undefined);});
+s.settings.course.observations={[r.id]:{signature:e.current.signature,selectivityExhausted:true,exhaustionBasis:'Constructed QA declaration, not measured experiments.'}};
+e=courseEvaluation(s);
+check('declaration identifies the next family without claiming MET',()=>assert.equal(e.current.status,'EFFICIENCY_NEXT'));
+check('handoff never prescribes a new injection',()=>assert.equal(e.nextPlanned,null));
+check('Retention path is reference only, not an instruction to restart',()=>{assert.match(e.chain[0].state,/reference only/i);assert.match(e.chain[0].next,/does not reopen/);});
+check('Selectivity path explains exhaustion and the FC1 boundary',()=>{assert.match(e.chain[1].state,/exhaustion declared/);assert.equal(e.chain[1].next,FC1_HANDOFF_NOTE);assert.match(e.chain[1].basis,/Constructed QA declaration/);});
+check('Efficiency row agrees with the main action',()=>{assert.equal(e.chain[2].next,e.current.action);assert.match(e.chain[2].state,/not implemented in FC1/);});
+check('all run records are unchanged',()=>assert.equal(JSON.stringify(s.runs),before));
+s.settings.specs.pressure={...s.settings.specs.pressure,value:1900};e=courseEvaluation(s);
+check('pressure HOLD overrides the old exhaustion declaration',()=>{assert.equal(e.current.status,'HOLD');assert.equal(e.nextPlanned,null);assert.doesNotMatch(e.chain[1].state,/exhaustion declared/);});
+s.settings.specs.pressure.value=4000;s.settings.specs.minRs.value=2;e=courseEvaluation(s);
+check('changed specifications expire exhaustion and re-evaluate Selectivity',()=>{assert.equal(e.current.stage,'selectivity');assert.notEqual(e.current.status,'EFFICIENCY_NEXT');});
+console.log(JSON.stringify({pass:count,fail:0,scope:'Constructed QA; raw run data unchanged.'}));
